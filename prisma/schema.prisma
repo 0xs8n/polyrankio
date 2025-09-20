@@ -1,0 +1,35 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Trader {
+  id           String   @id @default(uuid())
+  walletAddress String   @unique
+  name         String
+  xProfile     String?
+  avatar       String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  pnlSnapshots PnLSnapshot[]
+
+  @@map("traders")
+}
+
+model PnLSnapshot {
+  id         String  @id @default(uuid())
+  traderId   String  @default(uuid())
+  dailyPnL   Float   @default(0)
+  weeklyPnL  Float   @default(0)
+  monthlyPnL Float   @default(0)
+  timestamp  DateTime @default(now())
+
+  trader Trader @relation(fields: [traderId], references: [id], onDelete: Cascade)
+
+  @@map("pnl_snapshots")
+}
