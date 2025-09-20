@@ -1,7 +1,7 @@
-// src/app/page.tsx - POLYRANK DARK DESIGN
+// src/app/page.tsx - POLYRANK DARK DESIGN - FIXED VERSION
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { polymarketClient } from '@/lib/polymarket';
 
 interface Trader {
@@ -38,6 +38,7 @@ export default function HomePage() {
   const [timeFilter, setTimeFilter] = useState<'daily' | 'weekly' | 'monthly'>('monthly');
   const [traders, setTraders] = useState<Trader[]>([]);
   const [isLoadingTraders, setIsLoadingTraders] = useState(false);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
@@ -53,64 +54,28 @@ export default function HomePage() {
   });
   const [isLoadingPrice, setIsLoadingPrice] = useState(false);
 
-  // Client-side cache for POL price
-  let lastPriceFetch = 0;
-  let cachedPrice: { price: number; change24h: number; lastUpdated: string } | null = null;
-
   // Fetch POL price
-  const fetchPolPrice = async () => {
-    const now = Date.now();
-    if (cachedPrice && now - lastPriceFetch < 60000) {
-      setPolPrice(cachedPrice);
-      return;
-    }
+  const fetchPolPrice = useCallback(async () => {
     setIsLoadingPrice(true);
     try {
       const response = await fetch('/api/pol-price');
       if (!response.ok) throw new Error('Failed to fetch POL price');
       const data = await response.json();
-      cachedPrice = {
-        price: data.price,
-        change24h: data.change24h,
+      setPolPrice({
+        price: data.price || 0.41,
+        change24h: data.change24h || 0,
         lastUpdated: data.lastUpdated || new Date().toISOString(),
-      };
-      lastPriceFetch = now;
-      setPolPrice(cachedPrice);
+      });
     } catch (error) {
       console.error('Failed to fetch POL price:', error);
+      // Keep default values on error
     } finally {
       setIsLoadingPrice(false);
     }
-  };
-
-  // Fetch traders from API and refresh PnL
-  const fetchAndRefreshTraders = async () => {
-    setIsLoadingTraders(true);
-    setError(null);
-    try {
-      const response = await fetch('/api/traders');
-      if (!response.ok) throw new Error('Failed to fetch traders');
-      const tradersData = await response.json();
-      const tradersWithDates = tradersData.map((trader: any) => ({
-        ...trader,
-        lastUpdated: new Date(trader.lastUpdated),
-        calculatedAt: trader.calculatedAt,
-      }));
-      setTraders(tradersWithDates);
-
-      // Refresh PnL immediately after loading traders
-      if (tradersWithDates.length > 0) {
-        await fetchRealTraderDataInternal(tradersWithDates);
-      }
-    } catch (error) {
-      console.error('Error fetching traders:', error);
-      setError('Failed to load traders from database');
-      setIsLoadingTraders(false);
-    }
-  };
+  }, []);
 
   // Save traders to API
-  const saveTradersToAPI = async (updatedTraders: Trader[]) => {
+  const saveTradersToAPI = useCallback(async (updatedTraders: Trader[]) => {
     try {
       const response = await fetch('/api/traders', {
         method: 'PUT',
@@ -118,15 +83,14 @@ export default function HomePage() {
         body: JSON.stringify(updatedTraders),
       });
       if (!response.ok) throw new Error('Failed to save traders');
-      const result = await response.json();
     } catch (error) {
       console.error('Error saving traders:', error);
       setError('Failed to save P&L data to database');
     }
-  };
+  }, []);
 
   // Internal function to fetch P&L data with traders passed as parameter
-  const fetchRealTraderDataInternal = async (currentTraders: Trader[]) => {
+  const fetchRealTraderDataInternal = useCallback(async (currentTraders: Trader[]) => {
     try {
       const walletAddresses = currentTraders.map((t) => t.walletAddress);
       const validAddresses = walletAddresses.filter((addr) =>
@@ -172,10 +136,38 @@ export default function HomePage() {
     } finally {
       setIsLoadingTraders(false);
     }
-  };
+  }, [saveTradersToAPI]);
+
+  // Fetch traders from API and refresh PnL
+  const fetchAndRefreshTraders = useCallback(async () => {
+    setIsLoadingTraders(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/traders');
+      if (!response.ok) throw new Error('Failed to fetch traders');
+      const tradersData = await response.json();
+      const tradersWithDates = tradersData.map((trader: any) => ({
+        ...trader,
+        lastUpdated: new Date(trader.lastUpdated),
+        calculatedAt: trader.calculatedAt,
+      }));
+      setTraders(tradersWithDates);
+
+      // Refresh PnL immediately after loading traders
+      if (tradersWithDates.length > 0) {
+        await fetchRealTraderDataInternal(tradersWithDates);
+      }
+    } catch (error) {
+      console.error('Error fetching traders:', error);
+      setError('Failed to load traders from database');
+    } finally {
+      setIsLoadingTraders(false);
+      setIsInitialLoad(false);
+    }
+  }, [fetchRealTraderDataInternal]);
 
   // Fetch real trader data (public function for manual refresh)
-  const fetchRealTraderData = async () => {
+  const fetchRealTraderData = useCallback(async () => {
     if (traders.length === 0) {
       setError('No traders added yet.');
       return;
@@ -184,16 +176,16 @@ export default function HomePage() {
     setIsLoadingTraders(true);
     setError(null);
     await fetchRealTraderDataInternal(traders);
-  };
+  }, [traders, fetchRealTraderDataInternal]);
 
-  const getSortedTraders = () => {
+  const getSortedTraders = useCallback(() => {
     return [...traders].sort((a, b) => {
       const pnlKey = `${timeFilter}PnL` as keyof typeof a.currentPnL;
       return b.currentPnL[pnlKey] - a.currentPnL[pnlKey];
     });
-  };
+  }, [traders, timeFilter]);
 
-  const formatCurrency = (amount: number) => {
+  const formatCurrency = useCallback((amount: number) => {
     const isNegative = amount < 0;
     const formatted = new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -202,13 +194,13 @@ export default function HomePage() {
       maximumFractionDigits: 2,
     }).format(Math.abs(amount));
     return isNegative ? `-${formatted}` : `+${formatted}`;
-  };
+  }, []);
 
-  const getPnLColor = (amount: number) => {
+  const getPnLColor = useCallback((amount: number) => {
     return amount >= 0 ? 'text-green-400' : 'text-red-400';
-  };
+  }, []);
 
-  const copyToClipboard = (text: string) => {
+  const copyToClipboard = useCallback((text: string) => {
     navigator.clipboard.writeText(text);
     setCopiedAddress(text);
     if (copiedTimeoutRef.current) {
@@ -217,8 +209,9 @@ export default function HomePage() {
     copiedTimeoutRef.current = setTimeout(() => {
       setCopiedAddress(null);
     }, 1500);
-  };
+  }, []);
 
+  // Clean up timeout on unmount
   useEffect(() => {
     return () => {
       if (copiedTimeoutRef.current) {
@@ -232,18 +225,33 @@ export default function HomePage() {
     fetchPolPrice();
     const interval = setInterval(fetchPolPrice, 60000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchPolPrice]);
 
   // Load traders on mount
   useEffect(() => {
     fetchAndRefreshTraders();
-  }, []);
+  }, [fetchAndRefreshTraders]);
 
   // Periodic refresh every 15 minutes
   useEffect(() => {
-    const interval = setInterval(fetchAndRefreshTraders, 15 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, []);
+    if (traders.length > 0) {
+      const interval = setInterval(fetchAndRefreshTraders, 15 * 60 * 1000);
+      return () => clearInterval(interval);
+    }
+  }, [fetchAndRefreshTraders, traders.length]);
+
+  // Show loading screen during initial load
+  if (isInitialLoad) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <div className="text-white text-xl font-semibold">Loading Polyrank...</div>
+          <div className="text-gray-400 text-sm mt-2">Fetching trader data</div>
+        </div>
+      </div>
+    );
+  }
 
   const sortedTraders = getSortedTraders();
 
@@ -251,17 +259,17 @@ export default function HomePage() {
     <div className="min-h-screen bg-gray-950 text-gray-100 relative overflow-hidden">
       {/* Animated Background */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-20 left-20 w-32 h-32 bg-blue-500/10 rounded-full blur-lg sm:blur-xl animate-pulse"></div>
+        <div className="absolute top-20 left-20 w-32 h-32 bg-blue-500/10 rounded-full blur-xl animate-pulse"></div>
         <div
-          className="absolute top-40 right-32 w-48 h-48 bg-purple-500/10 rounded-full blur-lg sm:blur-xl animate-pulse"
+          className="absolute top-40 right-32 w-48 h-48 bg-purple-500/10 rounded-full blur-xl animate-pulse"
           style={{ animationDelay: '2s' }}
         ></div>
         <div
-          className="absolute bottom-32 left-1/4 w-40 h-40 bg-indigo-500/10 rounded-full blur-lg sm:blur-xl animate-pulse"
+          className="absolute bottom-32 left-1/4 w-40 h-40 bg-indigo-500/10 rounded-full blur-xl animate-pulse"
           style={{ animationDelay: '4s' }}
         ></div>
         <div
-          className="absolute bottom-20 right-20 w-24 h-24 bg-cyan-500/10 rounded-full blur-lg sm:blur-xl animate-pulse"
+          className="absolute bottom-20 right-20 w-24 h-24 bg-cyan-500/10 rounded-full blur-xl animate-pulse"
           style={{ animationDelay: '1s' }}
         ></div>
         <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-transparent to-purple-500/5"></div>
@@ -283,11 +291,11 @@ export default function HomePage() {
       {/* POL Price Card - Top Right Corner */}
       <div className="absolute top-4 right-4 z-20">
         <a href="https://www.tradingview.com/chart/?symbol=BINANCE%3APOLUSDT.P" target="_blank" rel="noopener noreferrer">
-          <div className="bg-gray-800 rounded-xl p-3 border border-gray-700 shadow-lg hover:bg-gray-750 transition-colors cursor-pointer touch-action-manipulation">
+          <div className="bg-gray-800 rounded-xl p-3 border border-gray-700 shadow-lg hover:bg-gray-750 transition-colors cursor-pointer">
             <div className="flex items-center space-x-2">
               <div className="relative">
                 <div className="w-8 h-8 bg-purple-600 rounded-lg flex items-center justify-center">
-                  <img src="/polygon.svg" alt="Polygon" className="w-5 h-5 object-contain" />
+                  <div className="w-5 h-5 bg-purple-300 rounded"></div>
                 </div>
               </div>
               <div>
@@ -340,7 +348,7 @@ export default function HomePage() {
               rel="noopener noreferrer"
               className="mt-4 inline-flex items-center text-gray-400 hover:text-white transition-colors duration-300 text-sm"
             >
-              <img src="/Twitter.webp" alt="Twitter" className="w-4 h-4 mr-2" />
+              <div className="w-4 h-4 bg-blue-400 rounded mr-2"></div>
               Follow us on Twitter
             </a>
           </div>
@@ -355,7 +363,7 @@ export default function HomePage() {
               <button
                 key={filter}
                 onClick={() => setTimeFilter(filter)}
-                className={`px-6 py-3 text-sm font-semibold rounded-lg transition-all duration-300 cursor-pointer touch-action-manipulation ${
+                className={`px-6 py-3 text-sm font-semibold rounded-lg transition-all duration-300 ${
                   timeFilter === filter
                     ? 'bg-blue-600 text-white shadow-lg transform scale-105'
                     : 'text-gray-400 hover:text-white hover:bg-gray-700/50'
@@ -372,7 +380,7 @@ export default function HomePage() {
           <button
             onClick={fetchRealTraderData}
             disabled={isLoadingTraders}
-            className="bg-green-600 hover:bg-green-700 disabled:bg-green-800 text-white px-4 py-2 rounded-xl transition-colors cursor-pointer touch-action-manipulation"
+            className="bg-green-600 hover:bg-green-700 disabled:bg-green-800 text-white px-4 py-2 rounded-xl transition-colors"
           >
             {isLoadingTraders ? 'Loading...' : 'Refresh P&L Data'}
           </button>
@@ -452,13 +460,13 @@ export default function HomePage() {
                               rel="noopener noreferrer"
                               className="text-blue-400 hover:text-blue-300 transition-colors"
                             >
-                              <img src="/Twitter.webp" alt="Twitter" className="h-5 w-5 object-contain" />
+                              <div className="w-5 h-5 bg-blue-400 rounded"></div>
                             </a>
                           )}
                         </div>
                         <button
                           onClick={() => copyToClipboard(trader.walletAddress)}
-                          className="text-sm text-gray-400 hover:text-blue-400 font-mono transition-colors cursor-pointer w-32 text-left touch-action-manipulation"
+                          className="text-sm text-gray-400 hover:text-blue-400 font-mono transition-colors cursor-pointer w-32 text-left"
                           title="Click to copy"
                         >
                           {copiedAddress === trader.walletAddress
@@ -471,7 +479,7 @@ export default function HomePage() {
                     {/* P&L Display */}
                     <div className="text-center sm:text-right mt-4 sm:mt-0 flex-1 flex flex-col justify-between">
                       <div>
-                        <p className="text-xs text-gray-400 uppercase tracking-wider cursor-pointer">
+                        <p className="text-xs text-gray-400 uppercase tracking-wider">
                           {timeFilter.charAt(0).toUpperCase() + timeFilter.slice(1)} PnL
                         </p>
                         <p
