@@ -22,7 +22,3 @@ body {
   background: var(--background);
   color: var(--foreground);
 }
-
-head link[rel="icon"] {
-  background-color: var(--background);
-}
